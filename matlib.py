@@ -99,7 +99,7 @@ def nancat(X, axis=0, pad_val=np.nan):
      Y=cat_pair(Y,i,axis=axis,pad_val=pad_val) # and concatenate 
   return Y 
 
-def errorBarPlot(Y,x=None, within_subject=True):
+def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
     """plot mean and standard error along dimension 0.
        Y [ subjects, x_levels, lines ]   = the data to plot
        within_subject: if True, subtract subject means before calculating s.e.m.
@@ -108,13 +108,18 @@ def errorBarPlot(Y,x=None, within_subject=True):
         Y=Y[:,:,None]   # ensure Y is at least 3D
     if x is None:       # default X values are integers
         x = np.arange(Y.shape[1])
-    mY = np.mean(Y,axis=0) # calculate mean of Y across subjects
+    mY = np.nanmean(Y,axis=0) # calculate mean of Y across subjects
     if within_subject: # use within subject errors?
-        dY = Y-np.mean(Y,axis=(1,2))[:,None,None] # subtract subject mean
+        dY = Y-np.nanmean(Y,axis=(1,2))[:,None,None] # subtract subject mean
     else: # use total error
         dY = Y
-    sY = np.std(Y,axis=0) / np.sqrt(Y.shape[0]) # calculate standard error
+    sY = np.nanstd(Y,axis=0) / np.sqrt(Y.shape[0]) # calculate standard error
     hplot = plt.plot(x, mY) # draw lines
     nlines = mY.shape[1]
     for i in range(nlines): # draw error areas
       plt.fill_between(x, mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=0.3)
+    if plot_individuals:
+        for sub in range(Y.shape[0]):
+            plt.gca().set_prop_cycle(None)
+            plt.plot(x, Y[sub], linewidth=0.5)
+

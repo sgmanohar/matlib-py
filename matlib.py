@@ -99,6 +99,7 @@ def nancat(X, axis=0, pad_val=np.nan):
      Y=cat_pair(Y,i,axis=axis,pad_val=pad_val) # and concatenate 
   return Y 
 
+
 def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
     """plot mean and standard error along dimension 0.
        Y [ subjects, x_levels, lines ]   = the data to plot

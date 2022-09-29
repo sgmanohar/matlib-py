@@ -105,10 +105,14 @@ def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
        Y [ subjects, x_levels, lines ]   = the data to plot
        within_subject: if True, subtract subject means before calculating s.e.m.
        x : x values corresponding to the columns (axis 1) of Y """
-    if len(Y.shape)<3:
-        Y=Y[:,:,None]   # ensure Y is at least 3D
+    
+    print(x.shape,Y.shape)
     if x is None:       # default X values are integers
         x = np.arange(Y.shape[1])
+    if x.shape==Y.shape : # do they have a value per bin?
+        x = np.nanmean(x,axis=0)
+    if len(Y.shape)<3:
+        Y=Y[:,:,None]   # ensure Y is at least 3D
     mY = np.nanmean(Y,axis=0) # calculate mean of Y across subjects
     if within_subject: # use within subject errors?
         dY = Y-np.nanmean(Y,axis=(1,2))[:,None,None] # subtract subject mean
@@ -118,9 +122,11 @@ def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
     hplot = plt.plot(x, mY) # draw lines
     nlines = mY.shape[1]
     for i in range(nlines): # draw error areas
-      plt.fill_between(x, mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=0.3)
+      if len(x.shape)>1:
+          plt.fill_between(x[:,i], mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=0.3)
+      else:
+          plt.fill_between(x, mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=0.3)
     if plot_individuals:
         for sub in range(Y.shape[0]):
             plt.gca().set_prop_cycle(None)
             plt.plot(x, Y[sub], linewidth=0.5)
-

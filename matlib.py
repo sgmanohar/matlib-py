@@ -137,3 +137,72 @@ def bool2nan(b):
     x = np.zeros(b.shape)
     x[b] = np.nan
     return x
+
+def conditionalPlot(x,y,
+        bin_width = 0.2,
+        n_bins = 20,
+        x_mean_function = np.nanmean,
+        y_mean_function = np.nanmean,
+        plot = True
+                     ):
+    """
+    Bin and plot the y values against the x values. 
+    
+    Parameters
+    ----------
+    x : ndarray datapoints x subjects x conditions
+        values corresponding to those in y, that will be used to bin y
+    y : ndarray datapoints x subjects x conditions
+        values to be averaged and plotted within the bins
+        
+    n_bins : number of bins i.e. step of sliding window (default 20)
+    bin_width : proportion of datapoints (0-1) contained in each window 
+             i.e. window width as a percentile (default 0.2)
+    y_mean_function, x_mean_function : function to apply to the values in each
+            window to get the plotted / returned value (default np.nanmean)
+    plot : True/False whether to plot (default True)
+            
+    Returns
+    -------
+    x_bin : bin centres for each bin x subject x condition
+    y_bin : bin means   for each bin x subject x conditoin
+
+    """
+    # if shape is too small, create an interface to a 3D array
+    if len(x.shape)==2: # no conditions?
+        x = np.array(x, ndmin=3, copy=False).transpose([1,2,0])  # add one dimension at the end
+        y = np.array(y, ndmin=3, copy=False).transpose([1,2,0]) 
+    elif len(x.shape)==1: # no subjects or conditions?
+        x = np.array(x, ndmin=3, copy=False).transpose([2,0,1])  # add two dimensions at the end
+        y = np.array(y, ndmin=3, copy=False).transpose([2,0,1]) 
+    
+    quantiles_left  = np.linspace( 0, 1-bin_width,n_bins+1 )
+    quantiles_right = np.linspace( bin_width, 1,  n_bins+1 )
+    qx_l = np.nanquantile(x, quantiles_left, axis=0, interpolation='linear')
+    qx_r = np.nanquantile(x, quantiles_right, axis=0, interpolation='linear')
+    qx_r[-1] += 1  # ensure that 'less than' will include the rightmost datapoint
+    mx = np.zeros( (n_bins, *y.shape[1:]) )
+    my = np.zeros( (n_bins, *y.shape[1:]) )
+    ey = np.zeros( (n_bins, *y.shape[1:]) )
+    n  = np.zeros( (n_bins, *y.shape[1:]) ) # keep count of how many in each bin
+    for i in range(n_bins):
+        edge_left  = qx_l[i]  # in range 0 to 1
+        edge_right = qx_r[i] if i<n_bins else inf
+        select = ( (x >= edge_left)
+                 & (x <  edge_right) )
+        # now take means of the selected values to give                    
+        # bin x subject x condition
+        mx[i,:,:] = x_mean_function( x + bool2nan(~select), axis = 0 ) # mean x
+        my[i,:,:] = y_mean_function( y + bool2nan(~select), axis = 0 ) # mean y
+        n[i,:,:]  = np.sum(select,axis=0) # count of datapoints
+        ey[i,:,:] = np.nanstd( y[select] , axis=0) / np.sqrt(n[i,:,:]) # standard error
+        
+    if plot:
+        if mx.shape[1]>1:  # are there subjects?
+            errorBarPlot(my.transpose((1,0,2)), x=mx.transpose((1,0,2)))
+        else: # just single line
+            sns.lineplot(x=mx[:,0,0],y=my[:,0,0])
+            plt.fill_between( mx[:,0,0], my[:,0,0]-ey[:,0,0] , my[:,0,0]+ey[:,0,0] ,
+                             alpha = 0.2) # error area
+    return mx,my
+  

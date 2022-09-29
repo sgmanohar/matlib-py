@@ -130,3 +130,10 @@ def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
         for sub in range(Y.shape[0]):
             plt.gca().set_prop_cycle(None)
             plt.plot(x, Y[sub], linewidth=0.5)
+
+            
+def bool2nan(b):
+    """ convert boolean True --> nan, False --> 0 """
+    x = np.zeros(b.shape)
+    x[b] = np.nan
+    return x

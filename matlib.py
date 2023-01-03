@@ -227,7 +227,10 @@ def hampel( X,
            sigma       : float = 0.5,   
            k           : float = 1.4826  # assumption of distribution being gaussian
            ):
-    pdb.set_trace()
+    """ 
+    run hampel_filter on each column of the data X. X is an n-dimensional array.
+    Return: an n-dimensional array.
+    """
     if len(X.shape)>1:
       Xn = [ hampel(xx) for xx in X.reshape(X.shape[0],-1) ]
       Y = np.array(Xn).reshape(X.shape)
@@ -240,43 +243,39 @@ def hampel( X,
     return Y
   
   
-def hampel_filter(trace, ratio, window_size=6, sigma=0.5):
+def hampel_filter(x, ratio, window_size=6, sigma=0.5):
     """
-    Hampel filter removes outliers using median from a walking window.
+    Hampel filter removes outliers as the deviation from the median 
+    in a sliding window.
     Outliers are replaced by the median of this window.
     Input:
-        * trace - list of pupil radii in mm
+        * x - values to filter  - must be a 1-dimensional np.array or list.
         * window_size - int with size of the window
-        * sigma - float defining whas is an outlier
+        * sigma - float defining whats counts as an outlier
     Output:
         * trace with removed outliers
     """
-
-    assert isinstance(window_size, int), "Window_size must be given as int"
-    assert isinstance(sigma, float), "Sigma must be given as float"
-
-    trace = np.array(trace)
-    cleaned_trace = trace.copy()
+    x = np.array(x)
+    cleaned_trace = x.copy()
 
     window_size = window_size*ratio
-    half_window = int(window_size)
+    HW = int(window_size) # half-window
 
-    k = 1.4826  # assumption of distribution being gaussian
 
-    for i in range(half_window, len(trace)-half_window):
+    for i in range(HW, len(x)-HW):
 
-        median_window = np.nanmedian(trace[i-half_window:i+half_window])
+        median_window = np.nanmedian(x[i-HW:i+HW])
         median_absolute_deviation = k * \
             np.nanmedian(
-                np.abs(trace[i-half_window:i+half_window]-median_window))
+                np.abs(x[i-HW:i+HW]-median_window))
 
-        if (np.abs(trace[i]-median_window) > sigma*median_absolute_deviation):
+        if (np.abs(x[i]-median_window) > sigma*median_absolute_deviation):
             cleaned_trace[i] = median_window
 
     # first and last half of the window is replaced by median of this half of window
     # this is used to remove potential outliers at these parts of the time trace
-    cleaned_trace[:half_window] = np.nanmedian(cleaned_trace[:half_window])
-    cleaned_trace[-half_window:] = np.nanmedian(cleaned_trace[-half_window:])
+    cleaned_trace[:HW] = np.nanmedian(cleaned_trace[:HW])
+    cleaned_trace[-HW:] = np.nanmedian(cleaned_trace[-HW:])
 
     return cleaned_trace
 

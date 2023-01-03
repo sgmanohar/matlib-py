@@ -206,3 +206,100 @@ def conditionalPlot(x,y,
                              alpha = 0.2) # error area
     return mx,my
   
+
+
+def smoothn(X,width=5):
+    """ apply a smoothing kernel along axis 0 """ 
+    k = np.ones((int(width)))
+    shp = X.shape
+    x2 = X.reshape(X.shape[0],-1)
+    Y  = x2.copy()
+    for i in range(x2.shape[1]):
+      Y[:,i] = np.convolve( x2[:,i], k, mode='same' )
+    return Y.reshape(shp)
+  
+  
+  
+  
+
+def hampel( X,
+           half_window : int   = 3, 
+           sigma       : float = 0.5,   
+           k           : float = 1.4826  # assumption of distribution being gaussian
+           ):
+    pdb.set_trace()
+    if len(X.shape)>1:
+      Xn = [ hampel(xx) for xx in X.reshape(X.shape[0],-1) ]
+      Y = np.array(Xn).reshape(X.shape)
+      return Y
+    Y = X.copy()
+    
+    for i in range(X.shape[1]):
+      Y[:,i] = hampel_filter(X[:,i], 1, window_size=half_window, sigma=sigma)
+      
+    return Y
+  
+  
+def hampel_filter(trace, ratio, window_size=6, sigma=0.5):
+    """
+    Hampel filter removes outliers using median from a walking window.
+    Outliers are replaced by the median of this window.
+    Input:
+        * trace - list of pupil radii in mm
+        * window_size - int with size of the window
+        * sigma - float defining whas is an outlier
+    Output:
+        * trace with removed outliers
+    """
+
+    assert isinstance(window_size, int), "Window_size must be given as int"
+    assert isinstance(sigma, float), "Sigma must be given as float"
+
+    trace = np.array(trace)
+    cleaned_trace = trace.copy()
+
+    window_size = window_size*ratio
+    half_window = int(window_size)
+
+    k = 1.4826  # assumption of distribution being gaussian
+
+    for i in range(half_window, len(trace)-half_window):
+
+        median_window = np.nanmedian(trace[i-half_window:i+half_window])
+        median_absolute_deviation = k * \
+            np.nanmedian(
+                np.abs(trace[i-half_window:i+half_window]-median_window))
+
+        if (np.abs(trace[i]-median_window) > sigma*median_absolute_deviation):
+            cleaned_trace[i] = median_window
+
+    # first and last half of the window is replaced by median of this half of window
+    # this is used to remove potential outliers at these parts of the time trace
+    cleaned_trace[:half_window] = np.nanmedian(cleaned_trace[:half_window])
+    cleaned_trace[-half_window:] = np.nanmedian(cleaned_trace[-half_window:])
+
+    return cleaned_trace
+
+
+
+def lmplot_stats(x, y, data, **kwargs):
+  """ 
+  calls seaborn lmplot, and adds p values
+  requires data=, x='name', and y='name' as kwargs.
+  also can use row, col
+  """
+  import seaborn as sns
+  import pandas as pd
+  import statsmodels.formula.api as smf
+  import statsmodels.api as sm
+  import scipy
+  bad = np.isnan(data[x]) | np.isnan(data[y])
+  g = sns.lmplot(x=x, y=y,data=data.loc[~bad,:], **kwargs)
+  
+  def annotate(data, **kws):
+      r, p = scipy.stats.pearsonr(data[x], data[y])
+      ax = plt.gca()
+      ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
+              transform=ax.transAxes)     
+  g.map_dataframe(annotate)
+  

@@ -208,15 +208,65 @@ def conditionalPlot(x,y,
   
 
 
-def smoothn(X,width=5):
-    """ apply a smoothing kernel along axis 0 """ 
-    k = np.ones((int(width)))
+def smoothn(X,width=5, kernel='uniform'):
+    """ 
+    apply a smoothing kernel along axis 0.
+    
+    """ 
+    KERNELS = {
+      'uniform':   lambda w: np.ones((int(w)))/w,
+      'gauss':  lambda w: gauss_kern( w )
+    }
+    k = KERNELS[kernel](width)
     shp = X.shape
-    x2 = X.reshape(X.shape[0],-1)
+    x2 = X.copy().reshape(X.shape[0],-1)
     Y  = x2.copy()
+    g  = x2.copy()
+    goodness = ~np.isnan(x2)
+    x2[np.isnan(x2)] = 0 # trick the algorithm into ignoring nans
     for i in range(x2.shape[1]):
-      Y[:,i] = np.convolve( x2[:,i], k, mode='same' )
-    return Y.reshape(shp)
+      # the trick here is to do a second convolution on a 0/1 array to 
+      # find out how many valid data points there were, and normalise by this
+      Y[:,i] = np.convolve( x2[:,i],       k, mode='same' )
+      g[:,i] = np.convolve( goodness[:,i], k,  mode='same')
+    #Y[0:width,:] = np.nan
+    #Y[-width:,:] = np.nan
+    Y = Y / g
+    Y[ g==0 ] = np.nan
+    Y = Y.reshape(shp)
+    return Y
+  
+def gauss_kern(N=10,S=0.4):
+  """
+  n-D Gaussian kernel, 
+   * N = width of kernel - either a single integer, or a list / tuple
+         with one value per dimension. e.g.  N=(10,10) gives a 10 x 10 kernel.
+   * S = standard deviation S (as a proportion of the width).
+         defaults to 0.4. Can be specified for each dimension separately.
+  Values are normalised to add up to 1
+  if S defaults to 1/3 of the width.
+  """
+  if not hasattr(N,"__len__"): # check if N is a scalar
+    N=(N,)
+  if not hasattr(S,"__len__"): # if S is scalar, use it for every dimension
+    S = [S] * len(N)
+  from scipy.stats import norm
+  xs = []
+  for i,n in enumerate(N):
+    dims = [ 1 ] * len(N)
+    dims[i] = n
+    support = np.linspace(-1,1,n) / S[i] # 1-dimensional support array
+    pdf = norm.pdf( support ) # convert to probabliity
+    xs.append(  pdf.reshape(dims) ) #
+  import math
+  p = math.prod(xs)  # not the numpy prod, which will multiply every inner element!
+  p = p / np.sum(p)
+  return p
+  
+  
+
+  
+
   
   
   

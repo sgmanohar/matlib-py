@@ -235,7 +235,7 @@ def smoothn(X,width=5, kernel='uniform',
     """ 
     apply a smoothing kernel along axis 0.
     width: integer specifying number of samples in smoothing window
-    kernel: 'uniform', 'gauss'
+    kernel: 'uniform', 'gauss', or 1D-array
     remove_edges: replace NaN for edge values (makes no assumptions)
     """ 
     KERNELS = {
@@ -246,6 +246,7 @@ def smoothn(X,width=5, kernel='uniform',
       k = KERNELS[kernel](width)
     else:
       k = kernel
+      width = len(k) # ignore width parameter 
     shp = X.shape
     x2 = X.copy().reshape(X.shape[0],-1)
     Y  = x2.copy()

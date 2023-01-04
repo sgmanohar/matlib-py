@@ -268,6 +268,49 @@ def gauss_kern(N=10,S=0.4):
   
 
   
+
+def interpnan(X, interpolator = np.interp):
+  """
+  Intepolate across regions of NaN, along axis = 0
+  Parameters
+  ----------
+  X : nd array
+    the input values, treated as an equally spaced series, 
+    with missing values coded as NaN
+    
+  intepolator : an interpolator function 
+    e.g. scipy.interpolate.CubicSpline, PchipInterpolator, Akima1DInterpolator,
+    or make_interp_spline
+
+  Returns
+  -------
+  nd array
+    copy of input array, with nan-values interpolated.
+  """
+  if len(X.shape)>2: # if more than 1D, convert to 2D
+    # call myself with the last dimensions flattened
+    Xn = [ interpnan(xx) for xx in X.reshape(X.shape[0],-1).T  ]
+    Y = np.array(Xn).reshape(X.shape) # then coerce back to original shape
+    return Y # done!
+  elif len(X.shape)<2:
+    X=X[:,None]
+  # run on 2D data:
+  Y = X.copy()
+  for i in range(Y.shape[1]):
+    yo = Y[:,i] # get vector
+    xo = np.arange(len(x)) # create time indices
+    bad = isnan(yo) # remove nans from both
+    yo = yo[~bad]
+    xo = xo[~bad]
+    xx = np.where(bad) # list of points to interpolate
+    # there are different syntaxes for linear and other interpolators
+    if interpolator is np.interp:
+      Y[xx,i] = np.interp( xx, xo, yo )
+    else:
+      Y[xx,i] = interpolator( xo,yo )   ( xx )
+  return Y
+
+
   
   
   

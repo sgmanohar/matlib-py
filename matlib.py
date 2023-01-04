@@ -229,16 +229,23 @@ def conditionalPlot(x,y,
   
 
 
-def smoothn(X,width=5, kernel='uniform'):
+
+def smoothn(X,width=5, kernel='uniform',
+            remove_edges = False):
     """ 
     apply a smoothing kernel along axis 0.
-    
+    width: integer specifying number of samples in smoothing window
+    kernel: 'uniform', 'gauss'
+    remove_edges: replace NaN for edge values (makes no assumptions)
     """ 
     KERNELS = {
       'uniform':   lambda w: np.ones((int(w)))/w,
       'gauss':  lambda w: gauss_kern( w )
     }
-    k = KERNELS[kernel](width)
+    if type(kernel) == str:
+      k = KERNELS[kernel](width)
+    else:
+      k = kernel
     shp = X.shape
     x2 = X.copy().reshape(X.shape[0],-1)
     Y  = x2.copy()
@@ -250,12 +257,14 @@ def smoothn(X,width=5, kernel='uniform'):
       # find out how many valid data points there were, and normalise by this
       Y[:,i] = np.convolve( x2[:,i],       k, mode='same' )
       g[:,i] = np.convolve( goodness[:,i], k,  mode='same')
-    #Y[0:width,:] = np.nan
-    #Y[-width:,:] = np.nan
+    if remove_edges:
+      Y[0:width,:] = np.nan
+      Y[-width:,:] = np.nan
     Y = Y / g
     Y[ g==0 ] = np.nan
     Y = Y.reshape(shp)
     return Y
+  
   
 def gauss_kern(N=10,S=0.4):
   """
@@ -320,7 +329,7 @@ def interpnan(X, interpolator = np.interp):
   for i in range(Y.shape[1]):
     yo = Y[:,i] # get vector
     xo = np.arange(len(x)) # create time indices
-    bad = isnan(yo) # remove nans from both
+    bad = np.isnan(yo) # remove nans from both
     yo = yo[~bad]
     xo = xo[~bad]
     xx = np.where(bad) # list of points to interpolate

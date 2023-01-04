@@ -1,6 +1,27 @@
 import numbers
 import numpy as np
 from collections import Sequence
+import matplotlib.pyplot as plt
+import scipy
+
+"""
+Sanjay Manohar's matlib (2018-)
+https://github.com/sgmanohar/matlib-py/blob/main/matlib.py
+
+based on Matlab library (2007-) for n-dimensional and time-series workflow.
+  nancat:          concatenate arrays with nan-padding
+  errorBarPlot:    plot nd-array calculating mean & SEM on axis 0,
+                   putting axis 1 as the x-axis, and axis 2 as different lines.
+  conditionalPlot: plot (X,Y) using sliding windowed binning of Y.
+  bool2nan:        map True:NaN, False:0
+  smoothn          smooth array along axis=0
+  gauss_kern       construct n-dimensional gaussian kernel
+  interpnan        interpolate over NaNs along axis=0
+  hampel           hampel filtering along axis=0
+  lmplot_stats     scatter plot with linear regression and p-values
+  
+"""
+
 def nancat(X, axis=0, pad_val=np.nan):
   """ concatenate a list of numpy arrays, with padding 
       This function concatenates nd-arrays into a larger array, like concatenate.

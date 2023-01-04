@@ -315,62 +315,74 @@ def interpnan(X, interpolator = np.interp):
   
   
 
+
 def hampel( X,
            half_window : int   = 3, 
            sigma       : float = 0.5,   
            k           : float = 1.4826  # assumption of distribution being gaussian
            ):
-    """ 
-    run hampel_filter on each column of the data X. X is an n-dimensional array.
-    Return: an n-dimensional array.
     """
-    if len(X.shape)>1:
-      Xn = [ hampel(xx) for xx in X.reshape(X.shape[0],-1) ]
-      Y = np.array(Xn).reshape(X.shape)
-      return Y
-    Y = X.copy()
-    
-    for i in range(X.shape[1]):
-      Y[:,i] = hampel_filter(X[:,i], 1, window_size=half_window, sigma=sigma)
-      
-    return Y
-  
-  
-def hampel_filter(x, ratio, window_size=6, sigma=0.5):
-    """
+    Run hampel filter on n-dimensional array, using axis=0 as the time dimension.  
     Hampel filter removes outliers as the deviation from the median 
     in a sliding window.
     Outliers are replaced by the median of this window.
-    Input:
-        * x - values to filter  - must be a 1-dimensional np.array or list.
-        * window_size - int with size of the window
-        * sigma - float defining whats counts as an outlier
-    Output:
-        * trace with removed outliers
+
+    Parameters
+    ----------
+    X : nd array
+    half_window : int. The default is 3.
+    sigma : float, optional. The standard deviation threshold. The default is 0.5.
+       higher value means less filtering
+    k : float, optional
+      DESCRIPTION. The default is 1.4826  # assumption of distribution being gaussian.
+  
+    Returns
+    -------
+    nd array -  filtered data
     """
-    x = np.array(x)
-    cleaned_trace = x.copy()
-
-    window_size = window_size*ratio
-    HW = int(window_size) # half-window
-
-
-    for i in range(HW, len(x)-HW):
-
-        median_window = np.nanmedian(x[i-HW:i+HW])
-        median_absolute_deviation = k * \
-            np.nanmedian(
-                np.abs(x[i-HW:i+HW]-median_window))
-
-        if (np.abs(x[i]-median_window) > sigma*median_absolute_deviation):
-            cleaned_trace[i] = median_window
-
-    # first and last half of the window is replaced by median of this half of window
-    # this is used to remove potential outliers at these parts of the time trace
-    cleaned_trace[:HW] = np.nanmedian(cleaned_trace[:HW])
-    cleaned_trace[-HW:] = np.nanmedian(cleaned_trace[-HW:])
-
-    return cleaned_trace
+    if len(X.shape)>2: # 3 or more dimensions?
+      # condense to 2 D
+      Xn = [ hampel(xx) for xx in X.reshape(X.shape[0],-1).T ]
+      Y = np.array(Xn).T.reshape(X.shape) # restore N-dimensions
+      return Y # finished!
+    elif len(X.shape)<2: # one-dimensional? add a dimension.
+      X = X[:,None]
+    Y = X.copy()
+    HW = int(half_window) # half-window
+      
+    def hampel_filter(x, HW=6, sigma=0.5):
+        """
+        Input:
+            * x - values to filter  - must be a 1-dimensional np.array or list.
+            * HW - int half-with size of the window
+            * sigma - float defining whats counts as an outlier
+        Output:
+            * trace with removed outliers
+        """
+        x = np.array(x)
+        cleaned_trace = x.copy()
+        for i in range(HW, len(x)-HW):
+            median_window = np.nanmedian(x[i-HW:i+HW])
+            median_absolute_deviation = k * np.nanmedian(
+                    np.abs(x[i-HW:i+HW]-median_window)
+                )
+    
+            if (np.abs(x[i]-median_window) > sigma*median_absolute_deviation):
+                cleaned_trace[i] = median_window
+    
+        # first and last half of the window is replaced by median of this half of window
+        # this is used to remove potential outliers at these parts of the time trace
+        cleaned_trace[:HW]  = np.nanmedian(cleaned_trace[:HW])
+        cleaned_trace[-HW:] = np.nanmedian(cleaned_trace[-HW:])
+    
+        return cleaned_trace
+      
+    for i in range(Y.shape[1]): # for each time trace, 
+      # run the hampel filter.
+      Y[:,i] = hampel_filter(Y[:,i], HW=HW, sigma=sigma)
+      
+    return Y
+  
 
 
 

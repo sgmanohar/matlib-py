@@ -159,13 +159,16 @@ def bool2nan(b):
     x[b] = np.nan
     return x
 
+
 def conditionalPlot(x,y,
         bin_width = 0.2,
         n_bins = 20,
         x_mean_function = np.nanmean,
         y_mean_function = np.nanmean,
-        plot = True
-                     ):
+        plot = True,
+        plot_individuals = False,
+        smoothing = 0,
+        stats = False, **kwargs ):
     """
     Bin and plot the y values against the x values. 
     
@@ -182,11 +185,14 @@ def conditionalPlot(x,y,
     y_mean_function, x_mean_function : function to apply to the values in each
             window to get the plotted / returned value (default np.nanmean)
     plot : True/False whether to plot (default True)
+    stats: True/False whether to include statistics
             
     Returns
     -------
     x_bin : bin centres for each bin x subject x condition
     y_bin : bin means   for each bin x subject x conditoin
+    
+    stats: requires statsmodels package
 
     """
     # if shape is too small, create an interface to a 3D array
@@ -219,12 +225,47 @@ def conditionalPlot(x,y,
         ey[i,:,:] = np.nanstd( y[select] , axis=0) / np.sqrt(n[i,:,:]) # standard error
         
     if plot:
+        if smoothing > 0:
+            # apply smoothing here
+            my = smoothn(my, width=smoothing)
         if mx.shape[1]>1:  # are there subjects?
-            errorBarPlot(my.transpose((1,0,2)), x=mx.transpose((1,0,2)))
+            errorBarPlot(my.transpose((1,0,2)), x=mx.transpose((1,0,2)), 
+                         plot_individuals=plot_individuals,**kwargs)
         else: # just single line
-            sns.lineplot(x=mx[:,0,0],y=my[:,0,0])
+            plt.plot(mx[:,0,0],my[:,0,0],**kwargs)
             plt.fill_between( mx[:,0,0], my[:,0,0]-ey[:,0,0] , my[:,0,0]+ey[:,0,0] ,
                              alpha = 0.2) # error area
+            if plot_individuals:
+                plt.scatter( x, y )
+          
+    if stats:
+      import statsmodels.formula.api as smf
+      import statsmodels.api as sm
+      import pandas as pd
+      # make subject and condition arrays by singleton expansion
+      subj = np.arange(x.shape[1])[None,:,None] + 0*x
+      cond = np.arange(x.shape[2])[None,None,:] + 0*x
+      tmp_df = pd.DataFrame({
+            'x':x.ravel(), 
+            'y':y.ravel(), 
+            's':subj.ravel(),
+            'c':cond.ravel(),
+            'ones': np.ones(x.ravel().shape)
+      })
+      tmp_df.s = tmp_df.s.astype('category') # convert subject and condition
+      tmp_df.c = tmp_df.c.astype('category') # to categorical
+      
+      if mx.shape[1]>1: # several subjects?
+        m=smf.mixedlm('y~x*c',data=tmp_df, groups=tmp_df.s, re_formula='~1').fit()
+        print(sm.stats.anova_lm(m))
+        print(m.summary())
+        signif = m.pvalues[1:] < 0.05
+      else: # just single subject
+        m = smf.ols("y~x",data=tmp_df).fit()
+        print(sm.stats.anova_lm(m))  
+        signif = m.pvalues[1:2] < 0.05
+      if any(signif):
+        print("*")
     return mx,my
   
 

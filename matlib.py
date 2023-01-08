@@ -185,12 +185,13 @@ def conditionalPlot(x,y,
     y_mean_function, x_mean_function : function to apply to the values in each
             window to get the plotted / returned value (default np.nanmean)
     plot : True/False whether to plot (default True)
-    stats: True/False whether to include statistics
+    stats: True/False whether to include statistics. 
             
     Returns
     -------
     x_bin : bin centres for each bin x subject x condition
     y_bin : bin means   for each bin x subject x conditoin
+    model : if stats==True, then return the linear model fitted to the data.
     
     stats: requires statsmodels package
 
@@ -266,6 +267,7 @@ def conditionalPlot(x,y,
         signif = m.pvalues[1:2] < 0.05
       if any(signif):
         print("*")
+      return mx, my, m
     return mx,my
   
 

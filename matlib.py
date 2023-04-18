@@ -340,7 +340,47 @@ def gauss_kern(N=10,S=0.4):
   
 
   
+def epoch_1d(x, edges, left=0, right=0):
+  """ 
+  Divide a vector into regions, and stack the regions into a matrix.
+   x:  the vector to epoch (1D np array)
+   edges: boolean array same size as x. 
+          =True at points to epoch on.
+          These determine the starts and ends of the segments.
+   left / right: move the epoch's left / right edges to include more/less datapoints. 
+          e.g. left = -10    ==>  include 10 datapoints before each edge marker
+               right = +20   ==>  include 20 datapoints after the end of each epoch
+   result 2D array with nan padding with epoched data as columns. 
+   """
+  assert(isinstance(x, np.ndarray), "x should be an numpy nd-array")
+  original_shape = x.shape # store original shape in case we want to restore it
+  # convert 1-d matrix to vector if needed
+  if len(original_shape)==2 and original_shape[0]==1:
+    x = x[0,:]
+  elif original_shape[1]==1:
+    x = x[:,0]
+  assert(len(x.shape)==1, "x should be a 1d vector")
+  if ~any(edges):
+    return x
+  # Get list of edges
+  edge = where(edges)[0] 
+  if not edge[0]==0: # Make sure first epoch starts at time zero
+    edge = r_[ 0, edge ]
+  if not edge[-1]==x.shape[0]:  # Make sure last epoch finishes at end
+    edge = r_[ edge, x.shape[0] ]
+  # Now do epoching
+  out = [ ]   # accumulate epochs in here
+  for e in range(len(edge)-1): # for each edge,
+    le = max( edge[e] + left, 0)  # left edge
+    re = min( edge[e+1] + right, x.shape[0] ) # right edge
+    out.append(x[ le:re ] )  # extract the required datapoints
+  return nancat(out,axis=1) # combine into new array
 
+  
+  
+  
+  
+  
   
 
 def interpnan(X, interpolator = np.interp):

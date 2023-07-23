@@ -352,30 +352,31 @@ def epoch_1d(x, edges, left=0, right=0):
                right = +20   ==>  include 20 datapoints after the end of each epoch
    result 2D array with nan padding with epoched data as columns. 
    """
-  assert(isinstance(x, np.ndarray), "x should be an numpy nd-array")
+  assert isinstance(x, np.ndarray), "x should be an numpy nd-array"
   original_shape = x.shape # store original shape in case we want to restore it
   # convert 1-d matrix to vector if needed
   if len(original_shape)==2 and original_shape[0]==1:
     x = x[0,:]
   elif original_shape[1]==1:
     x = x[:,0]
-  assert(len(x.shape)==1, "x should be a 1d vector")
+  assert len(x.shape)==1, "x should be a 1d vector"
   if ~any(edges):
     return x
   # Get list of edges
-  edge = where(edges)[0] 
+  edge = np.where(edges)[0]
+  if len(edge)==0: # situation with no edges at all
+    edge = np.array([0]) # add start point
   if not edge[0]==0: # Make sure first epoch starts at time zero
-    edge = r_[ 0, edge ]
+    edge = np.r_[ 0, edge ]
   if not edge[-1]==x.shape[0]:  # Make sure last epoch finishes at end
-    edge = r_[ edge, x.shape[0] ]
+    edge = np.r_[ edge, x.shape[0] ]
   # Now do epoching
   out = [ ]   # accumulate epochs in here
   for e in range(len(edge)-1): # for each edge,
-    le = max( edge[e] + left, 0)  # left edge
-    re = min( edge[e+1] + right, x.shape[0] ) # right edge
+    le = np.max( edge[e] + left, 0)  # left edge
+    re = np.min( edge[e+1] + right, x.shape[0] ) # right edge
     out.append(x[ le:re ] )  # extract the required datapoints
   return nancat(out,axis=1) # combine into new array
-
   
   
   

@@ -522,3 +522,146 @@ def lmplot_stats(x, y, data, **kwargs):
               transform=ax.transAxes)     
   g.map_dataframe(annotate)
   
+
+
+def scatter_regress(x, y, data=None, jitter = 0, **kwargs):
+  """ 
+  calls seaborn scatterplot, ols to get fit line, and pearson for stats.
+  syntax: data=DataFrame, x='name', and y='name' 
+  or:     x=Series, y=Series 
+  or:     x=column array, y = column array
+  
+  """
+  import seaborn as sns
+  import pandas as pd
+  import statsmodels.formula.api as smf
+  import statsmodels.api as sm
+  import scipy
+  
+  if data is None: 
+    # convert from x,y into a dataframe if needed
+    if isinstance(x, pd.Series) and isinstance(y, pd.Series):
+      # if series as input, make a dataframe by concatenation
+      data = pd.concat((x,y), axis=1)
+      x=x.name
+      y=y.name
+    elif isinstance(x,str): # already got column labels in a dataframe
+      data = data.copy()
+    else: # if x/y is numeric,
+      data = pd.DataFrame(data=np.stack((x,y),axis=1), columns=['x','y'])
+      x='x' # create new dataframe
+      y='y'
+  bad = np.isnan(data[x]) | np.isnan(data[y])
+  # best fit line - use least squares to predict
+  model = smf.ols(y+'~'+x,data).fit()
+  # calculate r and p from pearson 
+  if sum(~bad)>2:
+    r, p = scipy.stats.pearsonr(data[x][~bad], data[y][~bad])
+  else:
+    r = np.nan
+  if jitter: # add jittering?
+    data[x] += rand(*data[x].shape) * jitter
+    data[y] += rand(*data[y].shape) * jitter
+  
+  g = sns.scatterplot(x=x, y=y,data=data.loc[~bad,:], **kwargs)
+  ypred = model.predict( pd.DataFrame({ x:xlim()})  )
+  if m.pvalues[1]<0.05:
+    sns.lineplot(xlim(),ypred)  
+  if ~isnan(r):
+    ax = plt.gca()
+    ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
+              transform=ax.transAxes)     
+
+
+
+
+
+def sprint(x, nest=0, id_history = []):
+  """
+  sprint - structure printer. Goes through the first element of each "listy" item, 
+  and shows its size. It currently iterates through lists, tuples and dicts.
+  It uses getsizeof to find the largest item in a list, to drill down into it.
+    That makes it quite slow... but worth the wait.
+    
+  Sanjay Manohar 2023
+  """
+  from sys import getsizeof
+
+  max_nest = 6 # @todo this should be a parameter 
+
+  new_id = id(x) # ensure we don't recursively enter the same object
+  if new_id in id_history: 
+       return 
+  else:
+       id_history.append(new_id)
+  if nest > max_nest:
+     print((' '*nest) + "...")
+     return
+  if isinstance(x, (list,tuple)): # list items
+    print( (' '*nest ) + f"{len(x)}["  )
+    if len(x)>0:
+        # get the biggest element in the list
+        which_index = np.argmax( np.array( [getsizeof(i) for i in x] ) )
+        # get the example item and recursively print it
+        next_x = x[which_index]
+        #import pdb; pdb.set_trace()
+        sprint(next_x,nest+1,id_history)
+    print( (' '*nest) + ']' )
+  elif isinstance(x,dict): # dictionary contents
+    print( (' '*nest) + "{" )
+    keylist = list(x.keys()) # keys in the dict
+    # if the dict has a lot of keys, and the keys seem to be numeric,
+    if (len(keylist)>8) and not any(c.isdigit for c in keylist[0]):
+       # show the range of keys
+       which_key = np.argmax( np.array([ getsizeof(x[k]) for k in keylist ]) )
+       print(f"'{keylist[0]}'...'{keylist[-1]}': ")
+       # and then show one example value
+       sprint(x[keylist[which_key]], nest+1, id_history)
+    else: # If there are only a few keys, or the keys have numbers in, 
+        # go through every key of this item
+        for k,v in x.items():
+            # recursively print it
+            print((' '*nest)+k+": ",  end="")
+            sprint(x[k], nest+1, id_history)
+    print( (' '*nest) + '}')
+  elif isinstance(x, np.ndarray): # numpy object
+     # display array size
+     print( (' '*nest) + "np[" + ",".join([f"{i}" for i in x.shape]) + "]" )
+  elif isinstance(x, (str, numbers.Number, datetime.datetime)): # a primitive type
+     # don't bother going down the hierarchy!
+     print((' '*nest) + f"{type(x).__name__}={x}")
+  elif isinstance(x,object):
+     # generic objects - they could have interesting attributes. List them
+     fields = [i for i in dir(x) if not i.startswith("_") and not callable(getattr(x,i)) ]
+     # and for each attribute
+     for f in fields:
+        print((' '*nest) + f + ": ", end="")
+        sprint(getattr(x,f), nest+1, id_history) # recursively display it
+  else:
+      pass # don't know what this is, so don't print it
+
+def slide_match(x,y):
+  """ slide two 1-dimensional arrays along each other to find best match.
+  x = large array, in which to find y.
+  Example: if x = [1,2,3,4,5,6,7,8,9,10] and y = [3,4,5], then the best match
+  is at position 2, where x[2:5] = [3,4,5], and the match proportion is 1.0.
+  If x = [1,2,3,4,5,6,7,8,9,10] and y = [7,6,5], then the best match is at
+  any of positions 6,7,8, e.g. where x[6] = 6, and the match proportion is 1/3.
+  """
+  x=np.array(x) # ensure numpy arrays
+  y=np.array(y)
+  assert(len(x.shape)==1) # ensure 1 dimensional
+  assert(len(y.shape)==1)
+  if len(x)<len(y): # ensure x is at least as large as y
+    x = np.r_[x, np.nan * np.ones(len(y)-len(x))]
+  # how many different positions are there, if you slide y along x?
+  num_slides = len(x)-len(y) + 1 
+  # empty array for calculating the proportion of words that match, 
+  # for each slide potition.
+  match_prop = np.nan * np.zeros(num_slides)
+  # for each sliding position
+  for i in range( num_slides ):
+    # calculate what proportion of the words in y match the words in x
+    match_prop[i] = np.mean( x[i:(i+len(y))] == y )
+  return match_prop.max()    
+    

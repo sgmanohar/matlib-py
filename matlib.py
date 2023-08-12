@@ -576,6 +576,7 @@ def scatter_regress(x, y, data=None, jitter = 0, **kwargs):
 
 
 
+
 def sprint(x, nest=0, id_history = []):
   """
   sprint - structure printer. Goes through the first element of each "listy" item, 
@@ -586,9 +587,11 @@ def sprint(x, nest=0, id_history = []):
   Sanjay Manohar 2023
   """
   from sys import getsizeof
+  import pandas as pd
+  import types
 
   max_nest = 6 # @todo this should be a parameter 
-
+  breakpoint()
   new_id = id(x) # ensure we don't recursively enter the same object
   if new_id in id_history: 
        return 
@@ -610,35 +613,56 @@ def sprint(x, nest=0, id_history = []):
   elif isinstance(x,dict): # dictionary contents
     print( (' '*nest) + "{" )
     keylist = list(x.keys()) # keys in the dict
-    # if the dict has a lot of keys, and the keys seem to be numeric,
-    if (len(keylist)>8) and not any(c.isdigit for c in keylist[0]):
+    # if the dict has a lot of keys, or if the keys seem to be numeric,
+    if (len(keylist)>8) or any(c.isdigit for c in keylist[0]):
        # show the range of keys
        which_key = np.argmax( np.array([ getsizeof(x[k]) for k in keylist ]) )
-       print(f"'{keylist[0]}'...'{keylist[-1]}': ")
+       print((' '*nest)+f"'{keylist[0]}'...{len(keylist)}...'{keylist[-1]}': ")
        # and then show one example value
        sprint(x[keylist[which_key]], nest+1, id_history)
-    else: # If there are only a few keys, or the keys have numbers in, 
+    else: # If there are only a few keys, and the keys don't have numbers in, 
         # go through every key of this item
         for k,v in x.items():
             # recursively print it
             print((' '*nest)+k+": ",  end="")
             sprint(x[k], nest+1, id_history)
     print( (' '*nest) + '}')
+  elif isinstance(x, pd.DataFrame): # pandas dataframe
+    # display dataframe size and column names
+    print( (' '*nest) + f"pd[{x.shape[0]}x{x.shape[1]}] " + ",".join(x.columns) )
+  elif isinstance(x, pd.Series): # pandas series
+    # display series size and name
+    print( (' '*nest) + f"pd[{len(x)}] " + x.name )
   elif isinstance(x, np.ndarray): # numpy object
-     # display array size
-     print( (' '*nest) + "np[" + ",".join([f"{i}" for i in x.shape]) + "]" )
-  elif isinstance(x, (str, numbers.Number, datetime.datetime)): # a primitive type
-     # don't bother going down the hierarchy!
-     print((' '*nest) + f"{type(x).__name__}={x}")
+    # display array size
+    print( (' '*nest) + "np[" + ",".join([f"{i}" for i in x.shape]) + "]" )
+  elif isinstance(x,str):
+    # display string length
+    print( (' '*nest) + f"str[{len(x)}]" )
+  elif callable(x):
+    print( (' '*nest) + x.__doc__.split("\n")[0] ) # only show the first line of the docstring
+  elif isinstance(x, (numbers.Number, datetime.datetime)): # a primitive type - number or date
+    # don't bother going down the hierarchy!
+    print( (' '*nest) + f"{type(x).__name__}={repr(x)}")
+  elif isinstance(x,types.ModuleType):
+    # don't drill far into modules, but allow functions
+    fields = [i for i in dir(x) if not i.startswith("_")  ]
+    print((' '*nest) + f"{x} fields[{len(fields)}]")
   elif isinstance(x,object):
-     # generic objects - they could have interesting attributes. List them
-     fields = [i for i in dir(x) if not i.startswith("_") and not callable(getattr(x,i)) ]
-     # and for each attribute
-     for f in fields:
-        print((' '*nest) + f + ": ", end="")
+    # generic objects - they could have interesting attributes. List them
+    # but don't include functions or private attributes
+    fields = [i for i in dir(x) if not i.startswith("_") and not callable(getattr(x,i)) ]
+    # and for each attribute
+    for f in fields:
+      print((' '*nest) + f + ": ", end="")
+      try:
         sprint(getattr(x,f), nest+1, id_history) # recursively display it
+      except:
+        #print("err")
+        pass # print("")
   else:
-      pass # don't know what this is, so don't print it
+    # this should never happen - everything is an object, right? 
+    raise RuntimeError(f"Unknown type {type(x)}") 
 
 def slide_match(x,y):
   """ slide two 1-dimensional arrays along each other to find best match.

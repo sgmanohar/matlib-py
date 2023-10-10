@@ -689,3 +689,212 @@ def slide_match(x,y):
     match_prop[i] = np.mean( x[i:(i+len(y))] == y )
   return match_prop.max()    
     
+def show_feature_principal_components(df):
+  # remove non numeric columns
+  df = df.loc[:, [t.kind in 'biufc' for t in df.dtypes] ]
+  # clean data - first remove columns with zero variance
+  df = df.loc[:,df.std()>0]
+  # now zscore each column  and replace nan with zero (i.e. imputation to mean)
+  dfz = (df - df.mean()) / df.std()
+  dfz[np.isnan(dfz)] = 0
+  # get correlation matrix
+  C = dfz.corr()
+  # flip columns that are negatively associated with others
+  flip = mean(C>0,axis=1) < 0.5
+  dfz.loc[:,flip] = -dfz.loc[:,flip]
+  C = dfz.corr()
+  # calculate optimal leaf ordering
+  z = scipy.cluster.hierarchy.ward(dfz.T)
+  olo = scipy.cluster.hierarchy.leaves_list(z)
+  #olo = scipy.cluster.hierarchy.optimal_leaf_ordering( 
+  #      scipy.cluster.hierarchy.ward(dfz.T), dfz.T )
+  # reorder rows and columns
+  C = C.iloc[olo,olo]
+  subplot(2,2,1)
+  # show heatmap with a divergent colormap
+  sns.heatmap(C, cmap='RdBu_r', center=0)
+  try:
+    plt.colorbar()
+  except:
+    pass
+  subplot(2,2,2)
+  # get eigenvalues and eigenvectors
+  w,v = np.linalg.eig(C)
+  # scree plot of eigenvalues 
+  plt.plot(w,'o-')
+  # show significant values with asterisks
+  plt.plot(np.where(w>1)[0],w[w>1],'*')
+  plt.ylabel("eigenvalue")
+  plt.xlabel("component")
+  # show principal components as heatmap
+  subplot(2,2,3)
+  # scale components by their eigenvalues
+  v = v * w[None,:]
+  sns.heatmap(v , cmap='RdBu_r', center=0)
+  # calculate scores 
+  scores = dfz.values @ v
+  # scatter datapoints in the first two components
+  subplot(2,2,4)
+  plt.scatter(scores[:,0],scores[:,1])
+  plt.xlabel("PC1")
+  plt.ylabel("PC2")
+
+    
+
+def crossval_logistic_classifier(df,  # dataframe
+          group,     # column with labels to predict
+          predictors = None, # list of column names to use as predictors
+          classify=None,   # which two groups to classify
+          do_plot=True,
+          normalise_predictors_axis = None, # subtract predictor means (along one axis) before classifying
+          normalise_divisive = False, # divide by mean instead of subtracting
+          resample_all = False # if true, both classes are resampled to match the size of the first class.
+           # if false, only the second class is resampled, and it is done without replacement.
+
+):
+  """
+  crossval_logistic_classifier(df, group, predictors = None, classify=None)
+  Cross-validated logistic regression classifier.
+  Balances the two classes by subsampling items with classify[1] to match the number of items with classify[0].
+  Then fits a logistic regression model to predict the group from the predictors.
+  Then predicts the group of each item, using leave-one-out cross-validation.
+  Then plots the ROC curve, and returns the dataframe with predictions.
+  If classify is not specified, it uses the first two labels in the group column.
+  If predictors is not specified, it uses all columns except group.
+  Return:
+    df: dataframe with predictions column as 'pred'
+    auc: area under the ROC curve
+    acc: accuracy of prediction 
+  """
+  import pandas as pd
+  import statsmodels.formula.api as smf
+  import statsmodels.api as sm
+  df = df[ df[group].isin(classify) ].copy() # remove irrelevant rows (creating a copy)
+  df = df[ [group] + list(predictors) ] # select relevant columns
+  if classify == None: # if not specified, use first two labels
+     classify = df[group].unique()[0:2] 
+  if predictors == None: # if not specified, use all columns except group
+    predictors = df.columns[ df.columns!=group ] 
+  yvar = 'is'+classify[0]
+  df[yvar] = (df[group] == classify[0]).astype(int) # gives 1 if it's the first class.
+  if 'pred' in df.columns: # if there is already a prediction column, give an error
+    raise RuntimeError("crossval_logistic_classifier: dataframe already has a 'pred' column")
+  if normalise_predictors_axis is not None: 
+    if   normalise_predictors_axis == 1:
+      meanval = df[predictors].mean(axis=1).values[:,None]
+    elif normalise_predictors_axis == 0:
+      meanval = df[predictors].mean(axis=0).values[None,:]
+    if normalise_divisive:
+      df[predictors] = df[predictors] / meanval
+    else:
+      df[predictors] = df[predictors] - meanval
+  df = df.dropna(subset=predictors) # drop rows where predictors contain a nan
+  df['pred'] = np.nan # create blank column for prediction
+  model = yvar+' ~ ' + ' + '.join(predictors) # create model string
+  for row in range(df.shape[0]):   # leave one out: 
+    # subsample the data so that equal number of each class are present:
+    train_df = df.loc[ df[yvar]==0 ]   # 1. select all rows of the other class
+    # 2. select the same number of rows of the class we are predicting
+    if resample_all:
+       train_df = pd.concat( [ df.loc[ df[yvar]==0 ].sample(train_df.shape[0], replace=True), 
+                           df.loc[ df[yvar]==1 ].sample(train_df.shape[0], replace=True) ] )
+    else:
+      train_df = pd.concat( [ train_df,  df.loc[ df[yvar]==1 ].sample(train_df.shape[0], replace=False) ] )
+    index_to_predict = df.index[row] # 3. which row are we predicting?
+    try: # remove index of row-to-predict from tmp2  (if it is present - it might not be!)
+      train_df = train_df.drop(index_to_predict)     
+    except:
+      pass
+    try:
+      m = smf.logit(model,train_df).fit(disp=0)
+    except:
+      m = smf.glm(model,train_df,family=sm.families.Binomial()).fit_regularized( alpha=0.1, L1_wt=0 )
+    # predict the value of this row
+    pred = m.predict(df.loc[[index_to_predict],:])
+    # store the prediction 
+    df.loc[index_to_predict,'pred'] = pred.values # should be just one value
+  # compute error of prediction
+  df['pred_err'] = abs(df['pred'] - df[yvar])
+  # calculate roc from pred and yvar
+  thresholds = np.linspace(0,1,100)  
+  tpr = np.mean( df.pred[ df[yvar]==1 ].values[:,None] > thresholds[None,:] , axis=0)
+  fpr = np.mean( df.pred[ df[yvar]==0 ].values[:,None] > thresholds[None,:] , axis=0)
+  auc = -np.trapz(tpr,fpr)   # calculate AUC
+  if do_plot:
+    plt.plot(fpr,tpr)  # plot ROC curve
+    plt.gca().set_aspect('equal', adjustable='box')   # ensure axes are square
+    plt.xlabel('False positive rate')
+    plt.ylabel('True positive rate')
+    plt.title( 'ROC: '+classify[0]+' vs '+classify[1]+"\n" +
+              group+" ~ "+"+".join(predictors) )
+    plt.plot([0,1],[0,1],'--') # plot diagonal
+    # show AUC on plot
+    plt.text(0.5,0.1,f'AUC={auc:.3f}',horizontalalignment='center',verticalalignment='center')
+  acc = 1-np.mean((df.pred > 0.5) ^ (df[yvar])) # xor to get accuracy
+  return df, auc, acc
+
+def simple_ols(Y,X,C, var=False):
+  """
+  Fit a linear model, and return the contrast of interest. Ultra fast, operates on matrices.
+  returns contrasts of parameter estimates, and optionally their variance, covariance and t-statistic.
+    Y = (measurements x repeats)
+    X = (measurements x predictors)
+    C = (contrasts x predictors)
+    var = True/False, whether to return variances and t-statistics
+    Based on TB 2004!
+  """
+  from numpy.linalg import pinv
+  Xi = pinv(X)
+  b  = Xi @ Y
+  cb = C @ b 
+  if not var: 
+    return cb   
+  else: # calculate variance and t-statistic
+    prevar = np.diag( C @ Xi @ Xi.T @ C.T )
+    R = np.eye(X.shape[0])  -  X @ Xi
+    tR = np.trace(R)
+    res = Y - X @ b
+    sigsq = np.sum(res*res / tR) # scalar - error variance
+    varcb = prevar * sigsq  # variance of contrast
+    tstat = cb / np.sqrt(varcb)[:,None]  # t statistic = contrast / sqrt(variance). t[ contrast, repeat ]
+    covb = ( C @ X.T @ X @ C.T ) * sigsq
+    return cb, varcb, covb, tstat
+
+
+def permutation_ols(
+      Y, # Y = measurements x repeats,
+      X, # X = predictors matrix, C = contrasts
+      C, # C = contrasts matrix
+      nperm = 1000, # number of permutations
+      G=None, # grouping variable, to permute within groups
+      ):
+  """
+  Fit a linear model, and correct for multiple comparisons using permutations.
+    Y = (measurements x repeats)
+    X = (measurements x predictors)
+    C = (contrasts x predictors)
+    nperm = number of permutations
+    G = grouping variable, to permute within groups
+  returns 
+    cb = contrasts of parameter estimates
+    t  = t-statistic
+    p  = p-value, 0-1, = chance that the t statistic is higher than expected 
+       from the chance distribution. Values close to 0 or 1 are significant.
+  """
+  from scipy.linalg import pinv
+  # compute unpermuted stats
+  cb,_,_,t = simple_ols(Y,X,C,var=True)    # non-permuted statistic t[ contrast, repeat ]
+  tmax = np.nan * np.zeros((nperm, C.shape[0])) # store max t statistic for each permutation and contrast
+  for i in range(nperm):                   # for each permutation
+    if G is None:
+      Xp = np.random.permutation(X)        # shuffle rows of design matrix, keeping values in a row together
+    else:
+      Xp = np.zeros(X.shape)               # create empty matrix
+      for g in np.unique(G):               # for each group
+        Xp[G==g,:] = np.random.permutation(X[G==g,:])
+    _,_,_,tp = simple_ols(Y,Xp,C,var=True) # get t stat for the shuffled data
+    tmax[i, :] = tp.max(axis=1)            # store the max t statistic tmax [ permutation, contrast ]
+  # calculate p values
+  #            [ permutation, contrast, repeat ]
+  p = np.mean( tmax[:,:,None] > t[None,:,:], axis=0 )  # proportion of permutations that had a higher t statistic
+  return cb, t, p

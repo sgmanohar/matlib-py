@@ -1,26 +1,81 @@
 import numbers
 import numpy as np
-from collections import Sequence
+try:
+  from collections import Sequence
+except ImportError:
+  from collections.abc import Sequence
 import matplotlib.pyplot as plt
 import scipy
-
+import warnings
+import datetime
 """
 Sanjay Manohar's matlib (2018-)
 https://github.com/sgmanohar/matlib-py/blob/main/matlib.py
 
 based on Matlab library (2007-) for n-dimensional and time-series workflow.
-  nancat:          concatenate arrays with nan-padding
+  nancat:          concatenate arrays with nan-padding. Handles nested lists.
   errorBarPlot:    plot nd-array calculating mean & SEM on axis 0,
                    putting axis 1 as the x-axis, and axis 2 as different lines.
-  conditionalPlot: plot (X,Y) using sliding windowed binning of Y.
+  conditionalPlot: plot (X,Y) using sliding windowed binning of Y. 
+                   Treats axis 0 as samples, axis 1 as subjects, axis 3 as conditions.
+                   Also fit linear mixed effects model. 
   bool2nan:        map True:NaN, False:0
-  smoothn          smooth array along axis=0
+  smoothn          Smooth array along axis=0. Nan-friendly.
   gauss_kern       construct n-dimensional gaussian kernel
   interpnan        interpolate over NaNs along axis=0
   hampel           hampel filtering along axis=0
   lmplot_stats     scatter plot with linear regression and p-values
-  
+  scatter_regress  
+  slide_match      find where two arrays match by sliding one over another
+  simple_ols       ordinary least squares regression, for large data matrices
+  epoch_1d         divide a vector into regions, and stack the regions into a matrix.
+  sprint           structured print - drill down into nested lists and dicts
+  permutation_ols  permutation test to correct for multiple comparisons in OLS regression
+  show_principal
+  crossval_logistic_classifier      - logistic regression with LOO-CV and AUROC
+  show_feature_principal_components - simple PCA visualisation with optimal leaf order and scree
 """
+#### CODE SNIPPETS YOU MIGHT NEED
+# To re-import matlib, you might like to do something like:
+if False:
+  import importlib; import matlib; importlib.reload(matlib); from matlib import *
+# To get SVG graphics you might want to do something like:
+if False: ####   imports I will need for basic data science
+  from pylab import *
+  import pandas as pd
+  import seaborn as sns
+  import numbers
+  import statsmodels.formula.api as smf
+  import statsmodels.api as sm
+  import scipy.stats
+  import scipy.linalg
+  import pickle
+  import os
+  import sys
+
+
+def setup_for_science():
+  """
+  This function sets up some useful defaults for numpy and pandas.
+  """
+  import matplotlib_inline 
+  import pandas as pd
+  matplotlib_inline.backend_inline.set_matplotlib_formats('svg') 
+  import matplotlib.pyplot as plt
+  plt.rcParams['svg.fonttype'] = 'none' # to allow editing in inkscape
+  np.set_printoptions(precision=3, suppress=True, linewidth=200, edgeitems=10)
+  pd.set_option('display.max_columns', 100)
+  pd.set_option('display.max_rows', 100)
+  pd.set_option('display.width', 256)
+  pd.set_option('display.max_colwidth', 10)
+  pd.set_option('display.expand_frame_repr', False)
+  pd.set_option('display.precision', 3)
+def install_package(package):
+  """ install with pip using the current python interpreter"""
+  import sys
+  import subprocess
+  subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
 
 def nancat(X, axis=0, pad_val=np.nan):
   """ concatenate a list of numpy arrays, with padding 
@@ -82,8 +137,8 @@ def nancat(X, axis=0, pad_val=np.nan):
     for i in range(nD): # for each dimension
         if i==axis:    # don't pad dimension that we are concatenating along
             continue
-        if i>=len(sX) or i>=len(sY):
-            breakpoint()
+        if i>=len(sX) or i>=len(sY): # enough dimensions?
+            breakpoint() # this should never happen!
         if sX[i] < sY[i]: # if Y is bigger
             sX = X.shape
             padsize = np.array(sX)
@@ -121,13 +176,13 @@ def nancat(X, axis=0, pad_val=np.nan):
   return Y 
 
 
-def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
+def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False,
+                 alpha=0.3, quantiles = None, **kwargs, ):
     """plot mean and standard error along dimension 0.
        Y [ subjects, x_levels, lines ]   = the data to plot
        within_subject: if True, subtract subject means before calculating s.e.m.
        x : x values corresponding to the columns (axis 1) of Y """
     
-    print(x.shape,Y.shape)
     if x is None:       # default X values are integers
         x = np.arange(Y.shape[1])
     if x.shape==Y.shape : # do they have a value per bin?
@@ -144,9 +199,19 @@ def errorBarPlot(Y,x=None, within_subject=True, plot_individuals=False):
     nlines = mY.shape[1]
     for i in range(nlines): # draw error areas
       if len(x.shape)>1:
-          plt.fill_between(x[:,i], mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=0.3)
+          xvals = x[:,i]
       else:
-          plt.fill_between(x, mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=0.3)
+          xvals = x
+      if quantiles is None: # use standard error
+        plt.fill_between(xvals, mY[:,i]+sY[:,i], mY[:,i]-sY[:,i],alpha=alpha)
+      else: # use quantiles
+        if quantiles == True:
+           quantiles = [0.2,0.3, 0.4]
+        for j in quantiles:
+          q_low  = np.nanquantile(dY,   quantiles[j], axis=0)
+          q_high = np.nanquantile(dY, 1-quantiles[j], axis=0)
+          plt.fill_between(xvals, q_low, q_high,alpha = alpha/(len(quantiles)) )
+         
     if plot_individuals:
         for sub in range(Y.shape[0]):
             plt.gca().set_prop_cycle(None)
@@ -159,6 +224,33 @@ def bool2nan(b):
     x[b] = np.nan
     return x
 
+def conditionalPlot_df(data, x, y, group=None, do_stats=True, **kwargs):
+  """
+  Plot x against y, with different lines for each group.
+    data: dataframe
+    x: column name for x-axis
+    y: column name for y-axis
+    group: column name for grouping variable
+  """
+  if group is None:
+    output = conditionalPlot(data[x], data[y], **kwargs )
+  else:
+    grp = data[group]
+    unique_grp = np.unique(grp)
+    output = []
+    for g in unique_grp:
+        output.append( conditionalPlot(data[x][grp==g], data[y][grp==g], **kwargs ) )
+    # double up the list for shading
+    plt.legend([y for z in  [ [x,''] for x in unique_grp] for y in z ])
+  plt.xlabel(x)
+  plt.ylabel(y)
+  if do_stats: # display linear model result
+    from  statsmodels.formula.api import ols
+    if group is None:
+      print(ols(f'{y} ~ {x}', data).fit().summary().tables[1])
+    else:
+      print(ols(f'{y} ~ {x} * C({group},Sum)', data).fit().summary().tables[1])
+  return output
 
 def conditionalPlot(x,y,
         bin_width = 0.2,
@@ -186,6 +278,8 @@ def conditionalPlot(x,y,
             window to get the plotted / returned value (default np.nanmean)
     plot : True/False whether to plot (default True)
     stats: True/False whether to include statistics. 
+    
+    extra keyword arguments get sent to errorBarPlot().
             
     Returns
     -------
@@ -206,13 +300,20 @@ def conditionalPlot(x,y,
     
     quantiles_left  = np.linspace( 0, 1-bin_width,n_bins+1 )
     quantiles_right = np.linspace( bin_width, 1,  n_bins+1 )
-    qx_l = np.nanquantile(x, quantiles_left, axis=0, interpolation='linear')
-    qx_r = np.nanquantile(x, quantiles_right, axis=0, interpolation='linear')
+    quantileargs = {'interpolation':'linear'} # old versions of numpy
+    quantileargs = {'method':'interpolated_inverted_cdf'} # new versions
+    qx_l = np.nanquantile(x, quantiles_left , axis=0, **quantileargs)
+    qx_r = np.nanquantile(x, quantiles_right, axis=0, **quantileargs)
     qx_r[-1] += 1  # ensure that 'less than' will include the rightmost datapoint
     mx = np.zeros( (n_bins, *y.shape[1:]) )
     my = np.zeros( (n_bins, *y.shape[1:]) )
     ey = np.zeros( (n_bins, *y.shape[1:]) )
     n  = np.zeros( (n_bins, *y.shape[1:]) ) # keep count of how many in each bin
+    if len(qx_l)==1:
+      # Unexpectedly, nanquantile returns a single [nan], instead of an array of nan,
+      # when there is not enough data... so sadly we have to deal with it.
+      warnings.warn('not enough data for conditional plot')
+      return [],[]
     for i in range(n_bins):
         edge_left  = qx_l[i]  # in range 0 to 1
         edge_right = qx_r[i] if i<n_bins else inf
@@ -228,7 +329,7 @@ def conditionalPlot(x,y,
     if plot:
         if smoothing > 0:
             # apply smoothing here
-            my = smoothn(my, width=smoothing)
+            my = smoothn(my, width=smoothing )
         if mx.shape[1]>1:  # are there subjects?
             errorBarPlot(my.transpose((1,0,2)), x=mx.transpose((1,0,2)), 
                          plot_individuals=plot_individuals,**kwargs)
@@ -276,14 +377,14 @@ def conditionalPlot(x,y,
 def smoothn(X,width=5, kernel='uniform',
             remove_edges = False):
     """ 
-    apply a smoothing kernel along axis 0.
-    width: integer specifying number of samples in smoothing window
-    kernel: 'uniform', 'gauss', or 1D-array
+    apply a 1D smoothing kernel along axis 0.
+    width:     integer specifying number of samples in smoothing window
+    kernel:    'uniform', 'gauss', or 1D-array
     remove_edges: replace NaN for edge values (makes no assumptions)
     """ 
     KERNELS = {
       'uniform':   lambda w: np.ones((int(w)))/w,
-      'gauss':  lambda w: gauss_kern( w )
+      'gauss':     lambda w: gauss_kern( w )
     }
     if type(kernel) == str:
       k = KERNELS[kernel](width)
@@ -291,24 +392,30 @@ def smoothn(X,width=5, kernel='uniform',
       k = kernel
       width = len(k) # ignore width parameter 
     shp = X.shape
-    x2 = X.copy().reshape(X.shape[0],-1)
+    x2 = X.copy().reshape(X.shape[0],-1) # collapse last dimensions to give 2D
+    if X.dtype == int:
+      warnings.warn('smoothn: integer being converted fo float')
+      x2.dtype = float
     Y  = x2.copy()
     g  = x2.copy()
-    goodness = ~np.isnan(x2)
+    # @TODO next pair of lines can be modified to handle confidence / uncertainty.
+    # eg. : goodness = confidence ;  x2 = x2 * confidence
+    # and we can also infer confidence on the output trace eg. 1/c_out = sqrt(sum((1/c_in)^2))
+    goodness = ~np.isnan(x2)  # points that are good
     x2[np.isnan(x2)] = 0 # trick the algorithm into ignoring nans
-    for i in range(x2.shape[1]):
+    for i in range(x2.shape[1]): # for each column
       # the trick here is to do a second convolution on a 0/1 array to 
       # find out how many valid data points there were, and normalise by this
       Y[:,i] = np.convolve( x2[:,i],       k, mode='same' )
       g[:,i] = np.convolve( goodness[:,i], k,  mode='same')
+    #import pdb; pdb.set_trace()
     if remove_edges:
       Y[0:width,:] = np.nan
       Y[-width:,:] = np.nan
-    Y = Y / g
-    Y[ g==0 ] = np.nan
-    Y = Y.reshape(shp)
+    Y = Y / g          # normalise by number of good points
+    Y[ g==0 ] = np.nan # remove points where no data available
+    Y = Y.reshape(shp) # convert back to original shape
     return Y
-  
   
 def gauss_kern(N=10,S=0.4):
   """
@@ -336,21 +443,20 @@ def gauss_kern(N=10,S=0.4):
   p = math.prod(xs)  # not the numpy prod, which will multiply every inner element!
   p = p / np.sum(p)
   return p
-  
-  
 
-  
+
+
 def epoch_1d(x, edges, left=0, right=0):
-  """ 
+  """
   Divide a vector into regions, and stack the regions into a matrix.
    x:  the vector to epoch (1D np array)
-   edges: boolean array same size as x. 
+   edges: boolean array same size as x.
           =True at points to epoch on.
           These determine the starts and ends of the segments.
-   left / right: move the epoch's left / right edges to include more/less datapoints. 
+   left / right: move the epoch's left / right edges to include more/less datapoints.
           e.g. left = -10    ==>  include 10 datapoints before each edge marker
                right = +20   ==>  include 20 datapoints after the end of each epoch
-   result 2D array with nan padding with epoched data as columns. 
+   result 2D array with nan padding with epoched data as columns.
    """
   assert isinstance(x, np.ndarray), "x should be an numpy nd-array"
   original_shape = x.shape # store original shape in case we want to restore it
@@ -364,8 +470,6 @@ def epoch_1d(x, edges, left=0, right=0):
     return x
   # Get list of edges
   edge = np.where(edges)[0]
-  if len(edge)==0: # situation with no edges at all
-    edge = np.array([0]) # add start point
   if not edge[0]==0: # Make sure first epoch starts at time zero
     edge = np.r_[ 0, edge ]
   if not edge[-1]==x.shape[0]:  # Make sure last epoch finishes at end
@@ -377,12 +481,10 @@ def epoch_1d(x, edges, left=0, right=0):
     re = np.min( edge[e+1] + right, x.shape[0] ) # right edge
     out.append(x[ le:re ] )  # extract the required datapoints
   return nancat(out,axis=1) # combine into new array
-  
-  
-  
-  
-  
-  
+
+
+
+
 
 def interpnan(X, interpolator = np.interp):
   """
@@ -405,16 +507,16 @@ def interpnan(X, interpolator = np.interp):
   if len(X.shape)>2: # if more than 1D, convert to 2D
     # call myself with the last dimensions flattened
     Xn = [ interpnan(xx) for xx in X.reshape(X.shape[0],-1).T  ]
-    Y = np.array(Xn).reshape(X.shape) # then coerce back to original shape
+    Y = np.array(Xn).T.reshape(X.shape) # then coerce back to original shape
     return Y # done!
-  elif len(X.shape)<2:
+  elif len(X.shape)<2: # if 1D, make 2D
     X=X[:,None]
   # run on 2D data:
   Y = X.copy()
-  for i in range(Y.shape[1]):
+  for i in range(Y.shape[1]): # for each column
     yo = Y[:,i] # get vector
     xo = np.arange(len(x)) # create time indices
-    bad = np.isnan(yo) # remove nans from both
+    bad = isnan(yo) # remove nans from both
     yo = yo[~bad]
     xo = xo[~bad]
     xx = np.where(bad) # list of points to interpolate
@@ -425,10 +527,6 @@ def interpnan(X, interpolator = np.interp):
       Y[xx,i] = interpolator( xo,yo )   ( xx )
   return Y
 
-
-  
-  
-  
 
 
 def hampel( X,
@@ -499,38 +597,12 @@ def hampel( X,
     return Y
   
 
-
-
-def lmplot_stats(x, y, data, **kwargs):
+def lmplot_stats(x, y, data=None, **kwargs):
   """ 
   calls seaborn lmplot, and adds p values
   requires data=, x='name', and y='name' as kwargs.
-  also can use row, col
-  """
-  import seaborn as sns
-  import pandas as pd
-  import statsmodels.formula.api as smf
-  import statsmodels.api as sm
-  import scipy
-  bad = np.isnan(data[x]) | np.isnan(data[y])
-  g = sns.lmplot(x=x, y=y,data=data.loc[~bad,:], **kwargs)
-  
-  def annotate(data, **kws):
-      r, p = scipy.stats.pearsonr(data[x], data[y])
-      ax = plt.gca()
-      ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
-              transform=ax.transAxes)     
-  g.map_dataframe(annotate)
-  
+  also can use x,y as separate columns of numbers (pd.series or np.array)
 
-
-def scatter_regress(x, y, data=None, jitter = 0, **kwargs):
-  """ 
-  calls seaborn scatterplot, ols to get fit line, and pearson for stats.
-  syntax: data=DataFrame, x='name', and y='name' 
-  or:     x=Series, y=Series 
-  or:     x=column array, y = column array
-  
   """
   import seaborn as sns
   import pandas as pd
@@ -545,12 +617,88 @@ def scatter_regress(x, y, data=None, jitter = 0, **kwargs):
       data = pd.concat((x,y), axis=1)
       x=x.name
       y=y.name
-    elif isinstance(x,str): # already got column labels in a dataframe
-      data = data.copy()
     else: # if x/y is numeric,
       data = pd.DataFrame(data=np.stack((x,y),axis=1), columns=['x','y'])
       x='x' # create new dataframe
       y='y'
+  bad = np.isnan(data[x]) | np.isnan(data[y])
+  g = sns.lmplot(x=x, y=y,data=data.loc[~bad,:], **kwargs)
+  
+  def annotate(data, **kws):
+      r, p = scipy.stats.pearsonr(data[x], data[y])
+      ax = plt.gca()
+      ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
+              transform=ax.transAxes)     
+  g.map_dataframe(annotate)
+
+
+def regplot_stats(x,y,data=None, **kwargs):
+  import seaborn as sns
+  import pandas as pd
+  import scipy.stats
+  g=sns.regplot(x=x,y=y,data=data, **kwargs)
+  bad = np.isnan(data[x]) | np.isnan(data[y])
+  def annotate(data, **kws):
+    r, p = scipy.stats.pearsonr(data[x], data[y])
+    ax = plt.gca()
+    ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
+            transform=ax.transAxes)     
+  annotate(data.loc[~bad,:])
+
+def scatter_regress(x=None, y=None, data=None, jitter = 0, **kwargs):
+  """ 
+  calls seaborn scatterplot, ols to get fit line, and pearson for stats.
+  syntax: data=DataFrame, x='name', and y='name' 
+  or:     x=Series, y=Series 
+  or:     x=column array, y = column array
+  or:     data=DataFrame -- plots all pairs of columns as a PairGrid
+  
+  """
+  import seaborn as sns
+  import pandas as pd
+  import statsmodels.formula.api as smf
+  import statsmodels.api as sm
+  import scipy
+  import pylab
+  def looks_discrete(x):
+    """ does a column of values look discrete? 
+    what proportion of items are unique? 
+    if all unique, then return 0, as it looks continuous.
+    if more than 50% are repeated values, then return +1, as it looks discrete """
+    f_different = len(unique(x))/len(x)
+    return 1-minimum(1, 2*f_different)
+  
+  if data is None: 
+    # convert from x,y into a dataframe if needed
+    if isinstance(x, pd.Series) and isinstance(y, pd.Series):
+      # if series as input, make a dataframe by concatenation
+      if x.name is None: # can happen if series has no name
+        x=x.copy()
+        x.name = 'x'
+      if y.name is None:
+        y = y.copy()
+        y.name = 'y'
+      data = pd.concat((x,y), axis=1)
+      x=x.name
+      y=y.name
+    else: # if x/y is numeric,
+      data = pd.DataFrame(data=np.stack((x,y),axis=1), columns=['x','y'])
+      x='x' # create new dataframe
+      y='y'
+  else:
+    if isinstance(x,str) and isinstance(y,str): # already got column labels in a dataframe
+      data = data.copy()
+    elif x is None and y is None: # we have a dataframe, but not column labels
+      grid=sns.PairGrid( data )
+      grid.map_upper( scatter_regress , **kwargs) # recurse to plot single scatter plot in upper triangle
+      def lower(x,y, **kwargs):
+         conditionalPlot(x,y) # line 
+         sns.kdeplot(x=x,y=y, fill=True, alpha=0.3, **kwargs) # area
+      grid.map_lower( lower  , **kwargs ) 
+      grid.map_diag( sns.kdeplot, fill=True, alpha=0.3 , common_norm=False) # histograms
+      return
+    else:
+      raise ValueError("scatter_regress: x/y should be strings or None.")
   bad = np.isnan(data[x]) | np.isnan(data[y])
   # best fit line - use least squares to predict
   model = smf.ols(y+'~'+x,data).fit()
@@ -560,18 +708,17 @@ def scatter_regress(x, y, data=None, jitter = 0, **kwargs):
   else:
     r = np.nan
   if jitter: # add jittering?
-    data[x] += rand(*data[x].shape) * jitter
-    data[y] += rand(*data[y].shape) * jitter
+    data[x] += pylab.rand(*data[x].shape) * jitter
+    data[y] += pylab.rand(*data[y].shape) * jitter
   
-  g = sns.scatterplot(x=x, y=y,data=data.loc[~bad,:], **kwargs)
-  ypred = model.predict( pd.DataFrame({ x:xlim()})  )
-  if m.pvalues[1]<0.05:
-    sns.lineplot(xlim(),ypred)  
-  if ~isnan(r):
+  g = sns.scatterplot(x=x, y=y,data=data.loc[~bad,:], alpha=0.3, **kwargs)
+  ypred = model.predict( pd.DataFrame({ x:plt.xlim()})  )
+  if model.pvalues[1]<0.05:
+    sns.lineplot(x=plt.xlim(),y=ypred)  
+  if ~np.isnan(r):
     ax = plt.gca()
     ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
               transform=ax.transAxes)     
-
 
 
 
@@ -591,7 +738,6 @@ def sprint(x, nest=0, id_history = []):
   import types
 
   max_nest = 6 # @todo this should be a parameter 
-  breakpoint()
   new_id = id(x) # ensure we don't recursively enter the same object
   if new_id in id_history: 
        return 
@@ -614,7 +760,7 @@ def sprint(x, nest=0, id_history = []):
     print( (' '*nest) + "{" )
     keylist = list(x.keys()) # keys in the dict
     # if the dict has a lot of keys, or if the keys seem to be numeric,
-    if (len(keylist)>8) or any(c.isdigit for c in keylist[0]):
+    if (len(keylist)>8) or any(c.isdigit() for c in keylist[0]):
        # show the range of keys
        which_key = np.argmax( np.array([ getsizeof(x[k]) for k in keylist ]) )
        print((' '*nest)+f"'{keylist[0]}'...{len(keylist)}...'{keylist[-1]}': ")
@@ -638,7 +784,10 @@ def sprint(x, nest=0, id_history = []):
     print( (' '*nest) + "np[" + ",".join([f"{i}" for i in x.shape]) + "]" )
   elif isinstance(x,str):
     # display string length
-    print( (' '*nest) + f"str[{len(x)}]" )
+    if len(x)<40: # short strings can be displayed
+       print( (' '*nest) + str )
+    else: # long strings show just the length
+      print( (' '*nest) + f"str[{len(x)}]" )
   elif callable(x):
     print( (' '*nest) + x.__doc__.split("\n")[0] ) # only show the first line of the docstring
   elif isinstance(x, (numbers.Number, datetime.datetime)): # a primitive type - number or date
@@ -833,7 +982,7 @@ def crossval_logistic_classifier(df,  # dataframe
   acc = 1-np.mean((df.pred > 0.5) ^ (df[yvar])) # xor to get accuracy
   return df, auc, acc
 
-def simple_ols(Y,X,C, var=False):
+def simple_ols(Y,X,C=None, var=False, cov=False):
   """
   Fit a linear model, and return the contrast of interest. Ultra fast, operates on matrices.
   returns contrasts of parameter estimates, and optionally their variance, covariance and t-statistic.
@@ -841,24 +990,32 @@ def simple_ols(Y,X,C, var=False):
     X = (measurements x predictors)
     C = (contrasts x predictors)
     var = True/False, whether to return variances and t-statistics
+    cov = True/False, whether to return covariances
     Based on TB 2004!
   """
   from numpy.linalg import pinv
+  if C is None: # default contrasts = one per predictor
+    C = np.eye(X.shape[1])
   Xi = pinv(X)
   b  = Xi @ Y
   cb = C @ b 
   if not var: 
     return cb   
   else: # calculate variance and t-statistic
-    prevar = np.diag( C @ Xi @ Xi.T @ C.T )
-    R = np.eye(X.shape[0])  -  X @ Xi
-    tR = np.trace(R)
-    res = Y - X @ b
-    sigsq = np.sum(res*res / tR) # scalar - error variance
-    varcb = prevar * sigsq  # variance of contrast
-    tstat = cb / np.sqrt(varcb)[:,None]  # t statistic = contrast / sqrt(variance). t[ contrast, repeat ]
-    covb = ( C @ X.T @ X @ C.T ) * sigsq
-    return cb, varcb, covb, tstat
+    prevar = np.diag( C @ Xi @ Xi.T @ C.T ) 
+    # multiply the i'th row of X by the i'th column of Xi
+    tR = X.shape[0] - sum( ( X[i,:] @ Xi[:,i] for i in range(X.shape[0]) ) )
+    # R = np.eye(X.shape[0])  -  X @ Xi  # old version takes up a lot of ram
+    # tR = np.trace(R)
+    res = Y - X @ b              # residuals
+    sigsq = np.sum(res*res / tR,axis=0) # scalar - error variance
+    varcb = prevar[:,None] * sigsq[None,:]       # variance of contrast
+    tstat = cb / np.sqrt(varcb)[:,None]   # t statistic = contrast / sqrt(variance). t[ contrast, repeat ]
+    if cov:
+      covcb = ( C @ X.T @ X @ C.T ) * sigsq[None,None,:] 
+      return cb, varcb, covcb, tstat
+    else:
+       return cb, varcb, tstat
 
 
 def permutation_ols(
@@ -866,7 +1023,7 @@ def permutation_ols(
       X, # X = predictors matrix, C = contrasts
       C, # C = contrasts matrix
       nperm = 1000, # number of permutations
-      G=None, # grouping variable, to permute within groups
+      G=None, # grouping variable (optional), to permute within groups
       ):
   """
   Fit a linear model, and correct for multiple comparisons using permutations.
@@ -898,3 +1055,38 @@ def permutation_ols(
   #            [ permutation, contrast, repeat ]
   p = np.mean( tmax[:,:,None] > t[None,:,:], axis=0 )  # proportion of permutations that had a higher t statistic
   return cb, t, p
+
+if False: # unit test code
+  from pylab import *
+  N=1000  # number of datapoints
+  T=100   # number of repeats
+  D=3     # number of predictors
+  tau = linspace(0,4*pi,T) # time
+  X = randn(N,D)           # predictors matrix
+  b = ones((D,T)) * array([sin(tau)]) # ground truth parameters for simulation
+  Y = X@b + randn(N,T)                  # generate simulated measurements
+  cb,t,p=permutation_ols(Y,X,eye(D))    # test
+
+
+def align_bottom(X, inplace=False):
+  """
+  Align each column of the array X to the bottom by removing nans from the bottom end, 
+  and moving them to the top.
+  Expands to 2D if only 1D.
+  """
+  #if len(X.shape) == 1: # expand to 2D
+  #  X = X[:,None]
+  shp = X.shape
+  if len(shp) != 2: # convert to 2d array, and remember size
+    X = X.reshape(X.shape[0],-1)
+  if not inplace:
+    X = X.copy()
+  for i in range(X.shape[1]):     # for each column
+    last = np.where(~np.isnan(X[:,i]))[0][-1]  # find the last non-nan value
+    nn = X.shape[0] - last - 1        # number of nans at end (after last)
+    if nn>0:                        # the nn==0 case doesn't work because [:-0] is empty, not full!
+      X[nn:,i] = X[0:-nn,i]         # move values down 
+      X[0:nn,i] = np.nan            # set the rest to nan
+  if len(shp)>2:                  # restore original shape
+    X = X.reshape(shp)
+  return X

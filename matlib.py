@@ -25,7 +25,8 @@ based on Matlab library (2007-) for n-dimensional and time-series workflow.
   interpnan        interpolate over NaNs along axis=0
   hampel           hampel filtering along axis=0
   lmplot_stats     scatter plot with linear regression and p-values
-  scatter_regress  
+  regplot_stats    
+  scatter_regress  scatter two vectors with linear regression 
   slide_match      find where two arrays match by sliding one over another
   simple_ols       ordinary least squares regression, for large data matrices
   epoch_1d         divide a vector into regions, and stack the regions into a matrix.
@@ -34,6 +35,7 @@ based on Matlab library (2007-) for n-dimensional and time-series workflow.
   show_principal
   crossval_logistic_classifier      - logistic regression with LOO-CV and AUROC
   show_feature_principal_components - simple PCA visualisation with optimal leaf order and scree
+  align_bottom     move padding nans of each column to the top
 """
 #### CODE SNIPPETS YOU MIGHT NEED
 # To re-import matlib, you might like to do something like:
@@ -53,16 +55,26 @@ if False: ####   imports I will need for basic data science
   import os
   import sys
 
+"""
+%load_ext autoreload
+%autoreload 2
+# requires ipympl
+%matplotlib widget 
+"""
 
-def setup_for_science():
+def setup_for_science(dark = False):
   """
-  This function sets up some useful defaults for numpy and pandas.
+  This function sets up some useful defaults for numpy,  pandas and 
+  matplotlib.
+    dark: if True, use dark background for matplotlib
   """
   import matplotlib_inline 
   import pandas as pd
+  # make figures show and save as SVG
   matplotlib_inline.backend_inline.set_matplotlib_formats('svg') 
   import matplotlib.pyplot as plt
-  plt.rcParams['svg.fonttype'] = 'none' # to allow editing in inkscape
+  plt.rcParams['svg.fonttype'] = 'none'       # to allow editing in inkscape
+  # make numpy and pandas print nicely
   np.set_printoptions(precision=3, suppress=True, linewidth=200, edgeitems=10)
   pd.set_option('display.max_columns', 100)
   pd.set_option('display.max_rows', 100)
@@ -70,8 +82,19 @@ def setup_for_science():
   pd.set_option('display.max_colwidth', 10)
   pd.set_option('display.expand_frame_repr', False)
   pd.set_option('display.precision', 3)
+  if dark: 
+    plt.style.use('dark_background')
+  else:
+     plt.style.use('default')
+
 def install_package(package):
-  """ install with pip using the current python interpreter"""
+  """ install with pip using the current python interpreter 
+      package: a string, or a list of strings, of package names to install
+  """
+  if isinstance(package,list):   # if package is a list?
+    for p in package:
+      install_package(p)
+    return
   import sys
   import subprocess
   subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -224,7 +247,7 @@ def bool2nan(b):
     x[b] = np.nan
     return x
 
-def conditionalPlot_df(data, x, y, group=None, do_stats=True, **kwargs):
+def conditionalPlot_df(data, x, y, group=None, do_stats=True, window = 'boxcar', **kwargs):
   """
   Plot x against y, with different lines for each group.
     data: dataframe
@@ -233,23 +256,32 @@ def conditionalPlot_df(data, x, y, group=None, do_stats=True, **kwargs):
     group: column name for grouping variable
   """
   if group is None:
-    output = conditionalPlot(data[x], data[y], **kwargs )
+    if window == 'boxcar':
+      output = conditionalPlot(data[x], data[y], **kwargs )
+    elif window == 'gauss':
+      output = conditionalPlot_1d_window(data[x], data[y],  **kwargs )
   else:
     grp = data[group]
     unique_grp = np.unique(grp)
     output = []
     for g in unique_grp:
-        output.append( conditionalPlot(data[x][grp==g], data[y][grp==g], **kwargs ) )
+        if window == 'boxcar':
+          output.append( conditionalPlot(data[x][grp==g], data[y][grp==g], **kwargs ) )
+        elif window == 'gauss':
+          output.append( conditionalPlot_1d_window(data[x][grp==g], data[y][grp==g],  **kwargs ) )
     # double up the list for shading
     plt.legend([y for z in  [ [x,''] for x in unique_grp] for y in z ])
   plt.xlabel(x)
   plt.ylabel(y)
   if do_stats: # display linear model result
     from  statsmodels.formula.api import ols
-    if group is None:
-      print(ols(f'{y} ~ {x}', data).fit().summary().tables[1])
-    else:
-      print(ols(f'{y} ~ {x} * C({group},Sum)', data).fit().summary().tables[1])
+    try:
+      if group is None:
+        print(ols(f'{y} ~ {x}', data).fit().summary().tables[1])
+      else:
+        print(ols(f'{y} ~ {x} * C({group},Sum)', data).fit().summary().tables[1])
+    except ValueError as e:
+      print(f"Could not fit model {y} ~ {x} * C({group},Sum) beacuse {e}")
   return output
 
 def conditionalPlot(x,y,
@@ -371,6 +403,49 @@ def conditionalPlot(x,y,
       return mx, my, m
     return mx,my
   
+def conditionalPlot_1d_window(x,y, bin_width=0.2, n_bins=20, plot=True, df = None,
+                               **kwargs):
+    """
+    This function will use a gauusian window over the quantiles of x to
+    calculate a conditional plot of y against x.
+    width:    proportion of datapoints (0-1) contained in a 2 SD window
+    n_bins:   number of quantile bins 
+    """
+    if df is not None:
+      x = df[x]
+      y = df[y]
+    # tied rank of x's
+    import scipy.stats
+    xq = scipy.stats.rankdata(x, nan_policy='omit') / np.sum(~np.isnan(x))
+    mx = np.nan*np.zeros(n_bins) # bin x-centres
+    my = np.nan*np.zeros(n_bins) # bin y-means
+    ex = np.nan*np.zeros(n_bins) # bin standard errors
+    ey = np.nan*np.zeros(n_bins) 
+    n = np.nan*np.zeros(n_bins) # count of datapoints
+    for i in range(n_bins): # bin centre (quantile)
+      w_raw = np.exp( - (xq-(i/n_bins))**2 / (bin_width**2) )        # weights for each sample
+      w_raw /= np.sqrt(2*np.pi)
+      w = w_raw / np.nansum(w_raw) # make sum = 1, with nans counting as 0.
+      mx[i]   = np.nansum( x * w ) # should now compute the weighted mean!
+      my[i]   = np.nansum( y * w )
+      wstd_y  = np.sqrt( np.nansum( (y-my[i])**2 * w ) )
+      wstd_x  = np.sqrt( np.nansum( (x-mx[i])**2 * w ) )
+      # weighted standard error is sqrt(variance) = sd * sqrt( Sw^2 / (Sw^2 - S(w^2))
+      sem_correction = ( 
+         np.nansum(w_raw)**2 / (np.nansum(w_raw)**2 - np.nansum(w_raw**2)) 
+         / ( len(x) * bin_width ) 
+      )
+      effective_n = ( np.nansum(w_raw) * 1.47 )
+      effective_n = np.nansum(w_raw)**2 / np.nansum(w_raw**2)
+      print(f'N={effective_n}')
+      sem_correction = 1/effective_n
+      ex[i]   = wstd_x * np.sqrt(sem_correction)  
+      ey[i]   = wstd_y * np.sqrt(sem_correction)
+    if plot:
+        plt.plot(mx,my,'-.')
+        plt.fill_between( mx, my-ey , my+ey ,alpha = 0.2) # error area
+    return mx,my,ey
+
 
 
 
@@ -1070,9 +1145,10 @@ if False: # unit test code
 
 def align_bottom(X, inplace=False):
   """
-  Align each column of the array X to the bottom by removing nans from the bottom end, 
+  Align each column of the 2D array X to the bottom
+  by removing nans from the bottom end, 
   and moving them to the top.
-  Expands to 2D if only 1D.
+  Expands to 2D if only 1D. Should work with n-d too.
   """
   #if len(X.shape) == 1: # expand to 2D
   #  X = X[:,None]
